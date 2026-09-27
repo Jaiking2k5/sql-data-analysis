@@ -1,0 +1,628 @@
+"""
+SQL Data Analysis
+=================
+
+Self-contained SQL + SQLite + Pandas project.
+
+Demonstrates:
+
+    - relational tables
+    - INNER JOIN
+    - GROUP BY
+    - aggregation
+    - CTEs
+    - window functions
+    - ranking
+    - Pandas analysis
+    - CSV export
+
+The initial dataset is synthetic so that the repository
+runs immediately.
+
+Later, replace the sample-data section with a real dataset.
+
+Requirements
+------------
+pip install pandas
+
+Run
+---
+python sql_data_analysis.py
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pandas as pd
+
+
+DATABASE_FILE = "analysis.db"
+OUTPUT_FILE = "customer_analysis.csv"
+
+
+# ============================================================
+# DATABASE CONNECTION
+# ============================================================
+
+def create_connection():
+
+    connection = sqlite3.connect(
+        DATABASE_FILE
+    )
+
+    connection.execute(
+        "PRAGMA foreign_keys = ON;"
+    )
+
+    return connection
+
+
+# ============================================================
+# DATABASE SCHEMA
+# ============================================================
+
+def create_tables(
+    connection
+):
+
+    connection.executescript("""
+
+        DROP TABLE IF EXISTS orders;
+
+        DROP TABLE IF EXISTS customers;
+
+
+        CREATE TABLE customers (
+
+            customer_id INTEGER
+                PRIMARY KEY,
+
+            customer_name TEXT
+                NOT NULL,
+
+            region TEXT
+                NOT NULL
+        );
+
+
+        CREATE TABLE orders (
+
+            order_id INTEGER
+                PRIMARY KEY,
+
+            customer_id INTEGER
+                NOT NULL,
+
+            order_date TEXT
+                NOT NULL,
+
+            amount REAL
+                NOT NULL,
+
+            FOREIGN KEY (
+                customer_id
+            )
+            REFERENCES customers(
+                customer_id
+            )
+        );
+
+    """)
+
+    connection.commit()
+
+
+# ============================================================
+# SAMPLE DATA
+# ============================================================
+
+def insert_sample_data(
+    connection
+):
+
+    customers = [
+
+        (
+            1,
+            "Asha",
+            "South"
+        ),
+
+        (
+            2,
+            "Ravi",
+            "North"
+        ),
+
+        (
+            3,
+            "Meera",
+            "South"
+        ),
+
+        (
+            4,
+            "Arjun",
+            "West"
+        ),
+
+        (
+            5,
+            "Kiran",
+            "North"
+        )
+    ]
+
+
+    orders = [
+
+        (
+            101,
+            1,
+            "2026-01-05",
+            1200.00
+        ),
+
+        (
+            102,
+            1,
+            "2026-02-10",
+            800.00
+        ),
+
+        (
+            103,
+            2,
+            "2026-01-17",
+            1500.00
+        ),
+
+        (
+            104,
+            2,
+            "2026-03-03",
+            500.00
+        ),
+
+        (
+            105,
+            3,
+            "2026-01-28",
+            700.00
+        ),
+
+        (
+            106,
+            3,
+            "2026-02-21",
+            2200.00
+        ),
+
+        (
+            107,
+            4,
+            "2026-02-13",
+            900.00
+        ),
+
+        (
+            108,
+            5,
+            "2026-01-11",
+            650.00
+        ),
+
+        (
+            109,
+            5,
+            "2026-03-09",
+            1750.00
+        )
+    ]
+
+
+    connection.executemany(
+
+        """
+        INSERT INTO customers (
+            customer_id,
+            customer_name,
+            region
+        )
+
+        VALUES (?, ?, ?)
+        """,
+
+        customers
+    )
+
+
+    connection.executemany(
+
+        """
+        INSERT INTO orders (
+            order_id,
+            customer_id,
+            order_date,
+            amount
+        )
+
+        VALUES (?, ?, ?, ?)
+        """,
+
+        orders
+    )
+
+
+    connection.commit()
+
+
+# ============================================================
+# CUSTOMER ANALYSIS
+# ============================================================
+
+def customer_analysis(
+    connection
+):
+
+    query = """
+
+        WITH customer_totals AS (
+
+            SELECT
+
+                c.customer_id,
+
+                c.customer_name,
+
+                c.region,
+
+                COUNT(
+                    o.order_id
+                ) AS order_count,
+
+                SUM(
+                    o.amount
+                ) AS total_spend,
+
+                AVG(
+                    o.amount
+                ) AS average_order_value
+
+            FROM customers AS c
+
+            INNER JOIN orders AS o
+
+                ON c.customer_id =
+                   o.customer_id
+
+            GROUP BY
+
+                c.customer_id,
+
+                c.customer_name,
+
+                c.region
+        ),
+
+
+        ranked_customers AS (
+
+            SELECT
+
+                *,
+
+                RANK() OVER (
+
+                    PARTITION BY region
+
+                    ORDER BY
+                        total_spend DESC
+
+                ) AS regional_rank,
+
+
+                RANK() OVER (
+
+                    ORDER BY
+                        total_spend DESC
+
+                ) AS overall_rank
+
+            FROM customer_totals
+        )
+
+
+        SELECT
+
+            customer_id,
+
+            customer_name,
+
+            region,
+
+            order_count,
+
+            ROUND(
+                total_spend,
+                2
+            ) AS total_spend,
+
+            ROUND(
+                average_order_value,
+                2
+            ) AS average_order_value,
+
+            regional_rank,
+
+            overall_rank
+
+        FROM ranked_customers
+
+        ORDER BY overall_rank;
+
+    """
+
+    return pd.read_sql_query(
+        query,
+        connection
+    )
+
+
+# ============================================================
+# REGION ANALYSIS
+# ============================================================
+
+def region_analysis(
+    connection
+):
+
+    query = """
+
+        SELECT
+
+            c.region,
+
+            COUNT(
+                o.order_id
+            ) AS total_orders,
+
+            ROUND(
+                SUM(o.amount),
+                2
+            ) AS total_revenue,
+
+            ROUND(
+                AVG(o.amount),
+                2
+            ) AS average_order_value
+
+        FROM customers AS c
+
+        INNER JOIN orders AS o
+
+            ON c.customer_id =
+               o.customer_id
+
+        GROUP BY c.region
+
+        ORDER BY
+            total_revenue DESC;
+
+    """
+
+    return pd.read_sql_query(
+        query,
+        connection
+    )
+
+
+# ============================================================
+# MONTHLY ANALYSIS
+# ============================================================
+
+def monthly_analysis(
+    connection
+):
+
+    query = """
+
+        SELECT
+
+            substr(
+                order_date,
+                1,
+                7
+            ) AS month,
+
+            COUNT(*) AS orders,
+
+            ROUND(
+                SUM(amount),
+                2
+            ) AS revenue
+
+        FROM orders
+
+        GROUP BY month
+
+        ORDER BY month;
+
+    """
+
+    return pd.read_sql_query(
+        query,
+        connection
+    )
+
+
+# ============================================================
+# PANDAS ANALYSIS
+# ============================================================
+
+def pandas_analysis(
+    customer_df
+):
+
+    print(
+        "\nPandas summary:"
+    )
+
+    print(
+        customer_df[
+            [
+                "region",
+                "total_spend"
+            ]
+        ]
+        .groupby("region")
+        .sum()
+        .sort_values(
+            "total_spend",
+            ascending=False
+        )
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    connection = create_connection()
+
+    try:
+
+        create_tables(
+            connection
+        )
+
+        insert_sample_data(
+            connection
+        )
+
+
+        # ----------------------------------------------------
+        # CUSTOMER ANALYSIS
+        # ----------------------------------------------------
+
+        customers = customer_analysis(
+            connection
+        )
+
+        print(
+            "\n"
+            + "=" * 70
+        )
+
+        print(
+            "CUSTOMER ANALYSIS"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        print(
+            customers.to_string(
+                index=False
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # REGION ANALYSIS
+        # ----------------------------------------------------
+
+        regions = region_analysis(
+            connection
+        )
+
+        print(
+            "\n"
+            + "=" * 70
+        )
+
+        print(
+            "REGION ANALYSIS"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        print(
+            regions.to_string(
+                index=False
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # MONTHLY ANALYSIS
+        # ----------------------------------------------------
+
+        monthly = monthly_analysis(
+            connection
+        )
+
+        print(
+            "\n"
+            + "=" * 70
+        )
+
+        print(
+            "MONTHLY ANALYSIS"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        print(
+            monthly.to_string(
+                index=False
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # PANDAS
+        # ----------------------------------------------------
+
+        pandas_analysis(
+            customers
+        )
+
+
+        # ----------------------------------------------------
+        # EXPORT
+        # ----------------------------------------------------
+
+        customers.to_csv(
+            OUTPUT_FILE,
+            index=False
+        )
+
+        print(
+            f"\nCustomer results saved to:"
+            f" {Path(OUTPUT_FILE).resolve()}"
+        )
+
+        print(
+            f"SQLite database:"
+            f" {Path(DATABASE_FILE).resolve()}"
+        )
+
+
+    finally:
+
+        connection.close()
+
+
+if __name__ == "__main__":
+
+    main()
